@@ -1,3 +1,43 @@
+# Agentic RAG System
+
+A multi-agent RAG platform: a LangGraph supervisor routes each request to a Research agent (hybrid retrieval + web search + calculator) or an Execution agent (MCP tools). Answers come from Qwen served on vLLM. The stack runs on Docker with Redis, Postgres, Qdrant and JWT auth.
+
+## Overview
+
+- **Supervisor routing.** Deterministic: messages starting with `[MCP]` go to the Execution agent, everything else to the Research agent.
+- **Hybrid retrieval.** Dense search (Qdrant + `BAAI/bge-m3`) and BM25 run in parallel and are fused with weighted Reciprocal Rank Fusion (`k = 60`, BM25 weight 0.4 by default). Then a cross-encoder (`BAAI/bge-reranker-base`) reranks the top candidates.
+- **Query-aware retrieval.** `k` grows with query complexity, and the strategy (similarity / MMR / hybrid / threshold) is picked from the question type.
+- **Multi-tenant by department.** JWT claims carry `department_id` and `role`. RAG and memory can be isolated per department, and a policy matrix gates MCP tools.
+- **Memory.** Redis (short-term + entity), Qdrant (episodic), Postgres (summaries + append-only audit log).
+
+## Architecture
+
+```mermaid
+flowchart TB
+    U["Next.js UI"] --> API["FastAPI gateway<br/>JWT / API key, rate limit, SSE"]
+    API --> S{"Supervisor<br/>[MCP] prefix?"}
+    S -- no --> RA["Research agent<br/>LangGraph ReAct"]
+    S -- yes --> EA["Execution agent<br/>MCP tools"]
+    RA --> T1["search_documents"]
+    RA --> T2["web_search"]
+    RA --> T3["calculator"]
+    T1 --> V["Dense: Qdrant + bge-m3"]
+    T1 --> B["BM25"]
+    V --> F["Weighted RRF"]
+    B --> F
+    F --> X["Cross-encoder rerank<br/>bge-reranker-base"]
+    EA --> P["Policy engine<br/>department x role"]
+    RA --> LLM["vLLM: Qwen3-8B-AWQ"]
+    EA --> LLM
+    API --> M[("Redis / Qdrant / Postgres<br/>memory + audit")]
+```
+
+## Results
+
+Benchmark coming soon: retrieval quality (Recall@k / MRR) for dense-only vs hybrid vs hybrid + rerank, and end-to-end p50/p95 latency. Templates are already in `benchmarks/`; numbers will be added once measured.
+
+---
+
 ### Agent Pipeline
 
 ```
